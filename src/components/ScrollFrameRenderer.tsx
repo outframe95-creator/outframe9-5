@@ -9,8 +9,8 @@ interface ScrollFrameRendererProps {
   framePath?: string
 }
 
-const PRIORITY_FRAMES = 30
-const BATCH_SIZE = 15
+const PRIORITY_FRAMES = 20
+const BATCH_SIZE = 10
 
 const ScrollFrameRenderer = memo(function ScrollFrameRenderer({
   totalFrames = 180,
@@ -37,26 +37,29 @@ const ScrollFrameRenderer = memo(function ScrollFrameRenderer({
     let loaded = 0
     const imgs: (HTMLImageElement | null)[] = new Array(totalFrames).fill(null)
     let destroyed = false
+    let cw = 0, ch = 0
 
-    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    const isMobile = () => window.innerWidth < 768
+    const getScale = () => isMobile() ? 1 : Math.min(window.devicePixelRatio || 1, 1.5)
 
     const updateCanvasSize = () => {
       if (!canvas || destroyed) return
-      const w = window.innerWidth
-      const h = window.innerHeight
-      canvas.width = w * dpr
-      canvas.height = h * dpr
-      canvas.style.width = `${w}px`
-      canvas.style.height = `${h}px`
-      ctx.scale(dpr, dpr)
+      cw = window.innerWidth
+      ch = window.innerHeight
+      const s = getScale()
+      canvas.width = cw * s
+      canvas.height = ch * s
+      canvas.style.width = `${cw}px`
+      canvas.style.height = `${ch}px`
+      ctx.setTransform(s, 0, 0, s, 0, 0)
     }
 
     const drawFrame = (index: number) => {
       const img = imgs[index]
       if (!img || !canvas || destroyed) return
       currentFrameRef.current = index
-      ctx.clearRect(0, 0, window.innerWidth, window.innerHeight)
-      ctx.drawImage(img, 0, 0, window.innerWidth, window.innerHeight)
+      ctx.clearRect(0, 0, cw, ch)
+      ctx.drawImage(img, 0, 0, cw, ch)
     }
 
     const handleScroll = () => {
@@ -114,10 +117,10 @@ const ScrollFrameRenderer = memo(function ScrollFrameRenderer({
         loadBatch(start, end)
         start = end + 1
         if (start >= totalFrames) clearInterval(interval)
-      }, 200)
+      }, 300)
     }
 
-    const priorityTimeout = setTimeout(loadRemaining, 500)
+    const priorityTimeout = setTimeout(loadRemaining, 800)
 
     imagesRef.current = imgs
     updateCanvasSize()
@@ -135,10 +138,7 @@ const ScrollFrameRenderer = memo(function ScrollFrameRenderer({
       imagesRef.current = []
       isLoadedRef.current = false
       imgs.forEach((img) => {
-        if (img) {
-          img.onload = null
-          img.onerror = null
-        }
+        if (img) { img.onload = null; img.onerror = null }
       })
     }
   }, [totalFrames, framePrefix, frameExtension, framePath, padFrame])
