@@ -9,6 +9,9 @@ interface ScrollFrameRendererProps {
   framePath?: string
 }
 
+const PRIORITY_FRAMES = 30
+const BATCH_SIZE = 15
+
 const ScrollFrameRenderer = memo(function ScrollFrameRenderer({
   totalFrames = 180,
   framePrefix = 'ezgif-frame-',
@@ -16,11 +19,12 @@ const ScrollFrameRenderer = memo(function ScrollFrameRenderer({
   framePath = '/3d-frames',
 }: ScrollFrameRendererProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const imagesRef = useRef<HTMLImageElement[]>([])
+  const imagesRef = useRef<(HTMLImageElement | null)[]>([])
   const currentFrameRef = useRef(0)
   const rafRef = useRef<number>(0)
   const isLoadedRef = useRef(false)
   const [loading, setLoading] = useState(true)
+  const [progress, setProgress] = useState(0)
 
   const padFrame = useCallback((num: number) => String(num).padStart(3, '0'), [])
 
@@ -31,64 +35,111 @@ const ScrollFrameRenderer = memo(function ScrollFrameRenderer({
     if (!ctx) return
 
     let loaded = 0
-    const imgs: HTMLImageElement[] = []
+    const imgs: (HTMLImageElement | null)[] = new Array(totalFrames).fill(null)
+    let destroyed = false
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+
+    const updateCanvasSize = () => {
+      if (!canvas || destroyed) return
+      const w = window.innerWidth
+      const h = window.innerHeight
+      canvas.width = w * dpr
+      canvas.height = h * dpr
+      canvas.style.width = `${w}px`
+      canvas.style.height = `${h}px`
+      ctx.scale(dpr, dpr)
+    }
+
+    const drawFrame = (index: number) => {
+      const img = imgs[index]
+      if (!img || !canvas || destroyed) return
+      currentFrameRef.current = index
+      ctx.clearRect(0, 0, window.innerWidth, window.innerHeight)
+      ctx.drawImage(img, 0, 0, window.innerWidth, window.innerHeight)
+    }
 
     const handleScroll = () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
       rafRef.current = requestAnimationFrame(() => {
-        if (!isLoadedRef.current) return
+        if (!isLoadedRef.current || destroyed) return
         const scrollHeight = Math.max(document.documentElement.scrollHeight - window.innerHeight, 1)
-        const progress = Math.min(Math.max(window.scrollY / scrollHeight, 0), 1)
-        const frameIndex = Math.floor(progress * (totalFrames - 1))
+        const p = Math.min(Math.max(window.scrollY / scrollHeight, 0), 1)
+        const frameIndex = Math.floor(p * (totalFrames - 1))
         const targetFrame = Math.min(frameIndex, totalFrames - 1)
         if (targetFrame !== currentFrameRef.current && imgs[targetFrame]) {
-          currentFrameRef.current = targetFrame
-          ctx.clearRect(0, 0, canvas.width, canvas.height)
-          ctx.drawImage(imgs[targetFrame], 0, 0, canvas.width, canvas.height)
+          drawFrame(targetFrame)
         }
       })
     }
 
-    const resize = () => {
-      if (!canvas) return
-      canvas.width = window.innerWidth
-      canvas.height = window.innerHeight
-      if (imgs[currentFrameRef.current]) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height)
-        ctx.drawImage(imgs[currentFrameRef.current], 0, 0, canvas.width, canvas.height)
-      }
-    }
-
-    const onLoad = () => {
+    const onLoad = (i: number) => {
+      if (destroyed) return
       loaded++
+      const pct = Math.round((loaded / totalFrames) * 100)
+      setProgress(pct)
       if (loaded >= totalFrames) {
         isLoadedRef.current = true
         setLoading(false)
-        resize()
+        updateCanvasSize()
+        if (imgs[0]) drawFrame(0)
+      }
+      if (loaded === PRIORITY_FRAMES) {
+        updateCanvasSize()
+        if (imgs[0]) drawFrame(0)
+        handleScroll()
       }
     }
 
-    for (let i = 1; i <= totalFrames; i++) {
-      const img = new Image()
-      img.crossOrigin = 'anonymous'
-      img.src = `${framePath}/${framePrefix}${padFrame(i)}${frameExtension}`
-      img.onload = onLoad
-      img.onerror = onLoad
-      imgs.push(img)
+    const loadBatch = (start: number, end: number) => {
+      for (let i = start; i <= end; i++) {
+        if (imgs[i]) continue
+        const img = new Image()
+        img.crossOrigin = 'anonymous'
+        const idx = i
+        img.onload = () => onLoad(idx)
+        img.onerror = () => onLoad(idx)
+        img.src = `${framePath}/${framePrefix}${padFrame(idx + 1)}${frameExtension}`
+        imgs[idx] = img
+      }
     }
-    imagesRef.current = imgs
 
-    resize()
+    loadBatch(0, Math.min(PRIORITY_FRAMES - 1, totalFrames - 1))
+
+    const loadRemaining = () => {
+      let start = PRIORITY_FRAMES
+      const interval = setInterval(() => {
+        if (destroyed) { clearInterval(interval); return }
+        const end = Math.min(start + BATCH_SIZE - 1, totalFrames - 1)
+        loadBatch(start, end)
+        start = end + 1
+        if (start >= totalFrames) clearInterval(interval)
+      }, 200)
+    }
+
+    const priorityTimeout = setTimeout(loadRemaining, 500)
+
+    imagesRef.current = imgs
+    updateCanvasSize()
+
     window.addEventListener('scroll', handleScroll, { passive: true })
-    window.addEventListener('resize', resize, { passive: true })
+    window.addEventListener('resize', updateCanvasSize, { passive: true })
     handleScroll()
 
     return () => {
+      destroyed = true
+      clearTimeout(priorityTimeout)
       window.removeEventListener('scroll', handleScroll)
-      window.removeEventListener('resize', resize)
+      window.removeEventListener('resize', updateCanvasSize)
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
       imagesRef.current = []
       isLoadedRef.current = false
+      imgs.forEach((img) => {
+        if (img) {
+          img.onload = null
+          img.onerror = null
+        }
+      })
     }
   }, [totalFrames, framePrefix, frameExtension, framePath, padFrame])
 
@@ -97,13 +148,23 @@ const ScrollFrameRenderer = memo(function ScrollFrameRenderer({
       <canvas
         ref={canvasRef}
         className="fixed inset-0 w-full h-full pointer-events-none z-0"
-        style={{ objectFit: 'cover' }}
         aria-hidden="true"
       />
       {loading && (
         <div className="fixed inset-0 z-0 bg-black">
           <div className="absolute inset-0 bg-gradient-to-br from-zinc-900 via-black to-zinc-900" />
           <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(220,38,38,0.05),transparent_60%)]" />
+          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-3">
+            <div className="w-48 h-1 bg-zinc-800 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-red-600 to-red-400 rounded-full transition-all duration-300"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <span className="text-zinc-500 text-xs tracking-widest uppercase">
+              Loading {progress}%
+            </span>
+          </div>
         </div>
       )}
     </>
