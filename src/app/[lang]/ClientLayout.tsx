@@ -14,6 +14,7 @@ import PrivacySection from '@/components/PrivacySection'
 import Footer from '@/components/Footer'
 import ScrollFrameRenderer from '@/components/ScrollFrameRenderer'
 import PageLoader from '@/components/PageLoader'
+import WhatsAppButton from '@/components/WhatsAppButton'
 
 export default function ClientLayout({ children }: { children: React.ReactNode }) {
   const { dir } = useLanguage()
@@ -26,6 +27,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
         <Navbar />
         {children}
         <Footer />
+        <WhatsAppButton />
       </div>
     </div>
   )
